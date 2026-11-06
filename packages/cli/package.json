@@ -32,7 +32,7 @@
   },
   "dependencies": {
     "@loose-ends/core": "1.1.1",
-    "commander": "^14.0.0"
+    "commander": "^15.0.0"
   },
   "repository": {
     "type": "git",

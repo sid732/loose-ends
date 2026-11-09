@@ -175,7 +175,7 @@ export function parseComponent(path: string, text: string): ModuleInfo {
   let script = "";
   let template = "";
   let last = 0;
-  for (const m of text.matchAll(/(<script\b[^>]*>)([\s\S]*?)<\/script>/gi)) {
+  for (const m of text.matchAll(/(<script\b[^>]*>)([\s\S]*?)<\/script\s*>/gi)) {
     const start = m.index! + m[1]!.length;
     template += text.slice(last, m.index!);
     script += blank(text.slice(last, start)) + m[2]!;

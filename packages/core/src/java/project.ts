@@ -69,8 +69,23 @@ export function discoverJavaModules(root: string): JavaModule[] {
   return modules;
 }
 
+/** Blank XML comments, keeping line breaks. A linear scan, since a regex backtracks on many unclosed `<!--`. */
+function blankComments(text: string): string {
+  let out = "";
+  let i = 0;
+  for (;;) {
+    const start = text.indexOf("<!--", i);
+    if (start === -1) break;
+    const close = text.indexOf("-->", start + 4);
+    if (close === -1) break;
+    out += text.slice(i, start) + text.slice(start, close + 3).replace(/[^\n]/g, " ");
+    i = close + 3;
+  }
+  return out + text.slice(i);
+}
+
 function stripMaven(text: string, dropSections = true): string {
-  let out = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+  let out = blankComments(text);
   // The parent's coordinates come first; drop them so the module's own artifactId is found.
   out = out.replace(/<parent>[\s\S]*?<\/parent>/, (m) => m.replace(/[^\n]/g, " "));
   if (dropSections) {

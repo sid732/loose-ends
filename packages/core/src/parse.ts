@@ -175,11 +175,18 @@ export function parseComponent(path: string, text: string): ModuleInfo {
   let script = "";
   let template = "";
   let last = 0;
-  for (const m of text.matchAll(/(<script\b[^>]*>)([\s\S]*?)<\/script\s*>/gi)) {
-    const start = m.index! + m[1]!.length;
-    template += text.slice(last, m.index!);
-    script += blank(text.slice(last, start)) + m[2]!;
-    last = start + m[2]!.length;
+  // Find each opening tag, then the next closing tag, with two simple regexes rather than one lazy one.
+  const opening = /<script\b[^>]*>/gi;
+  const closing = /<\/script\b[^>]*>/gi;
+  for (let open = opening.exec(text); open; open = opening.exec(text)) {
+    const start = open.index + open[0].length;
+    closing.lastIndex = start;
+    const close = closing.exec(text);
+    const stop = close ? close.index : text.length;
+    template += text.slice(last, open.index);
+    script += blank(text.slice(last, start)) + text.slice(start, stop);
+    last = stop;
+    opening.lastIndex = close ? close.index + close[0].length : text.length;
   }
   template += text.slice(last);
   script += blank(text.slice(last));

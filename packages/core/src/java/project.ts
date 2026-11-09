@@ -45,9 +45,9 @@ export function discoverJavaModules(root: string): JavaModule[] {
   const managed = new Map<string, string>();
   for (const [file, t] of texts) {
     if (!file.endsWith("pom.xml")) continue;
-    for (const section of t.matchAll(/<dependencyManagement>([\s\S]*?)<\/dependencyManagement>/g)) {
-      for (const m of section[1]!.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
-        const tag = (name: string) => new RegExp(`<${name}>\\s*([^<]*?)\\s*</${name}>`).exec(m[1]!)?.[1];
+    for (const section of xmlBlocks(t, "<dependencyManagement>", "</dependencyManagement>")) {
+      for (const m of xmlBlocks(section.inner, "<dependency>", "</dependency>")) {
+        const tag = (name: string) => new RegExp(`<${name}>\\s*([^<]*?)\\s*</${name}>`).exec(m.inner)?.[1];
         const scope = tag("scope");
         if (scope && tag("groupId") && tag("artifactId")) managed.set(`${tag("groupId")}:${tag("artifactId")}`, scope);
       }
@@ -69,28 +69,46 @@ export function discoverJavaModules(root: string): JavaModule[] {
   return modules;
 }
 
-/** Blank XML comments, keeping line breaks. A linear scan, since a regex backtracks on many unclosed `<!--`. */
-function blankComments(text: string): string {
-  let out = "";
+interface XmlBlock {
+  index: number;
+  end: number;
+  inner: string;
+}
+
+/** Each `open ... close` span, nearest close first. A linear scan: lazy regexes backtrack on many unclosed tags. */
+function xmlBlocks(text: string, open: string, close: string): XmlBlock[] {
+  const out: XmlBlock[] = [];
   let i = 0;
   for (;;) {
-    const start = text.indexOf("<!--", i);
+    const start = text.indexOf(open, i);
     if (start === -1) break;
-    const close = text.indexOf("-->", start + 4);
-    if (close === -1) break;
-    out += text.slice(i, start) + text.slice(start, close + 3).replace(/[^\n]/g, " ");
-    i = close + 3;
+    const stop = text.indexOf(close, start + open.length);
+    if (stop === -1) break;
+    out.push({ index: start, end: stop + close.length, inner: text.slice(start + open.length, stop) });
+    i = stop + close.length;
+  }
+  return out;
+}
+
+/** Replace spans with spaces, keeping line breaks so line numbers hold. */
+function blankBlocks(text: string, open: string, close: string, first = false): string {
+  let out = "";
+  let i = 0;
+  for (const b of xmlBlocks(text, open, close)) {
+    out += text.slice(i, b.index) + text.slice(b.index, b.end).replace(/[^\n]/g, " ");
+    i = b.end;
+    if (first) break;
   }
   return out + text.slice(i);
 }
 
 function stripMaven(text: string, dropSections = true): string {
-  let out = blankComments(text);
+  let out = blankBlocks(text, "<!--", "-->");
   // The parent's coordinates come first; drop them so the module's own artifactId is found.
-  out = out.replace(/<parent>[\s\S]*?<\/parent>/, (m) => m.replace(/[^\n]/g, " "));
+  out = blankBlocks(out, "<parent>", "</parent>", true);
   if (dropSections) {
     for (const section of ["dependencyManagement", "build", "pluginRepositories", "reporting"]) {
-      out = out.replace(new RegExp(`<${section}>[\\s\\S]*?</${section}>`, "g"), (m) => m.replace(/[^\n]/g, " "));
+      out = blankBlocks(out, `<${section}>`, `</${section}>`);
     }
   }
   return out;
@@ -100,14 +118,14 @@ function stripMaven(text: string, dropSections = true): string {
 export function mavenDependencies(text: string, managed: Map<string, string> = new Map()): JavaDependency[] {
   const body = stripMaven(text);
   const out: JavaDependency[] = [];
-  for (const m of body.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
-    const block = m[1]!;
+  for (const m of xmlBlocks(body, "<dependency>", "</dependency>")) {
+    const block = m.inner;
     const tag = (name: string) => new RegExp(`<${name}>\\s*([^<]*?)\\s*</${name}>`).exec(block)?.[1];
     const group = tag("groupId");
     const artifact = tag("artifactId");
     const scope = tag("scope") ?? (group && artifact ? managed.get(`${group}:${artifact}`) : undefined) ?? "compile";
     if (!group || !artifact || scope !== "compile" || tag("type") === "pom" || tag("optional") === "true") continue;
-    const line = body.slice(0, m.index! + m[0].indexOf("<artifactId>")).split("\n").length;
+    const line = body.slice(0, m.index + body.slice(m.index, m.end).indexOf("<artifactId>")).split("\n").length;
     out.push({ group, artifact, line });
   }
   return out;

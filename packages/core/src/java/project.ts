@@ -33,17 +33,33 @@ export function discoverJavaModules(root: string): JavaModule[] {
   const files = fg.sync(["{,*/,*/*/,*/*/*/,*/*/*/*/}{pom.xml,build.gradle,build.gradle.kts}"], { cwd: root, ignore: IGNORE, onlyFiles: true }).sort();
   const catalog = readCatalog(root);
   const modules: JavaModule[] = [];
+  const texts = new Map<string, string>();
   for (const buildFile of files) {
-    let text = "";
     try {
-      text = readFileSync(join(root, buildFile), "utf8");
+      texts.set(buildFile, readFileSync(join(root, buildFile), "utf8"));
     } catch {
-      continue;
+      // Unreadable build file: skipped.
     }
+  }
+  // Scopes set in any <dependencyManagement> (usually the parent pom) apply where a module omits <scope>.
+  const managed = new Map<string, string>();
+  for (const [file, t] of texts) {
+    if (!file.endsWith("pom.xml")) continue;
+    for (const section of t.matchAll(/<dependencyManagement>([\s\S]*?)<\/dependencyManagement>/g)) {
+      for (const m of section[1]!.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
+        const tag = (name: string) => new RegExp(`<${name}>\\s*([^<]*?)\\s*</${name}>`).exec(m[1]!)?.[1];
+        const scope = tag("scope");
+        if (scope && tag("groupId") && tag("artifactId")) managed.set(`${tag("groupId")}:${tag("artifactId")}`, scope);
+      }
+    }
+  }
+  for (const buildFile of files) {
+    const text = texts.get(buildFile);
+    if (text === undefined) continue;
     const dir = posix.dirname(buildFile) === "." ? "" : posix.dirname(buildFile);
     const isMaven = buildFile.endsWith("pom.xml");
     const name = (isMaven ? /<artifactId>([^<]+)<\/artifactId>/.exec(stripMaven(text, false))?.[1] : undefined) ?? (dir ? posix.basename(dir) : "");
-    const dependencies = isMaven ? mavenDependencies(text) : gradleDependencies(text, catalog);
+    const dependencies = isMaven ? mavenDependencies(text, managed) : gradleDependencies(text, catalog);
     const hasManifest = existsSync(join(root, dir, "src/main/AndroidManifest.xml"));
     modules.push({ dir, buildFile, name, dependencies, app: APP_SIGNAL.test(text) || (hasManifest && /com\.android\.application/.test(text)), text });
   }
@@ -66,7 +82,7 @@ function stripMaven(text: string, dropSections = true): string {
 }
 
 /** Compile-scope `<dependency>` entries outside `<dependencyManagement>` and `<build>`. */
-export function mavenDependencies(text: string): JavaDependency[] {
+export function mavenDependencies(text: string, managed: Map<string, string> = new Map()): JavaDependency[] {
   const body = stripMaven(text);
   const out: JavaDependency[] = [];
   for (const m of body.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
@@ -74,7 +90,7 @@ export function mavenDependencies(text: string): JavaDependency[] {
     const tag = (name: string) => new RegExp(`<${name}>\\s*([^<]*?)\\s*</${name}>`).exec(block)?.[1];
     const group = tag("groupId");
     const artifact = tag("artifactId");
-    const scope = tag("scope") ?? "compile";
+    const scope = tag("scope") ?? (group && artifact ? managed.get(`${group}:${artifact}`) : undefined) ?? "compile";
     if (!group || !artifact || scope !== "compile" || tag("type") === "pom" || tag("optional") === "true") continue;
     const line = body.slice(0, m.index! + m[0].indexOf("<artifactId>")).split("\n").length;
     out.push({ group, artifact, line });
